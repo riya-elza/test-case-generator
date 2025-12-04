@@ -152,4 +152,4 @@ def generate_and_export():
 # Run Flask app
 # -----------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
