@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Test Case Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f9;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            width: 50%;
+            margin: 60px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 180px;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 15px;
+            resize: vertical;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 14px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0056c7;
+        }
+
+        .loading {
+            text-align: center;
+            font-size: 14px;
+            margin-top: 10px;
+            color: #444;
+            display: none;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>AI Test Case Generator</h2>
+
+    <label><strong>Enter Requirements:</strong></label>
+    <textarea id="requirements" placeholder="Enter requirements here..."></textarea>
+
+    <button onclick="generateExcel()">Generate & Download Excel</button>
+
+    <div class="loading" id="loading">Generating test cases, please wait...</div>
+</div>
+
+
+<script>
+function generateExcel() {
+    let requirements = document.getElementById("requirements").value.trim();
+
+    if (!requirements) {
+        alert("Please enter some requirements!");
+        return;
+    }
+
+    document.getElementById("loading").style.display = "block";
+
+    fetch("/generate-and-export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requirements: requirements })
+    })
+    .then(response => {
+        document.getElementById("loading").style.display = "none";
+
+        if (!response.ok) {
+            alert("Error generating test cases.");
+            return;
+        }
+
+        return response.blob();
+    })
+    .then(blob => {
+        let downloadUrl = URL.createObjectURL(blob);
+        let a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = "test_cases.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    })
+    .catch(err => {
+        document.getElementById("loading").style.display = "none";
+        alert("Something went wrong!");
+        console.error(err);
+    });
+}
+</script>
+
+</body>
+</html>
