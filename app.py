@@ -1,53 +1,49 @@
 import os
 import json
 import io
-from openai import OpenAI
+import re
 from flask import Flask, request, jsonify, send_file, render_template
 from openpyxl import Workbook
 from dotenv import load_dotenv
-load_dotenv()
 
+# Load environment variables
+load_dotenv()
+MODEL_NAME = os.getenv("GROQ_MODEL", "llama-3.3-8b-instant")
 # Initialize Flask app
 app = Flask(__name__)
 
-# Initialize OpenAI client using environment variable
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# -----------------------
+# Groq Config
+# -----------------------
+from groq import Groq
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY)
 
 # -----------------------
 # Frontend route
 # -----------------------
 @app.route("/", methods=["GET"])
 def home_page():
-    """
-    Serves the HTML frontend for the QA Test Case Generator
-    """
     return render_template("index.html")
-
 
 # -----------------------
 # Export test cases to Excel
 # -----------------------
 @app.route("/export/excel", methods=["POST"])
 def export_excel():
-    """
-    Accepts JSON test cases and returns them as an Excel (.xlsx) file.
-    """
     data = request.get_json()
     test_cases = data.get("test_cases", [])
 
     if not test_cases:
         return jsonify({"error": "No test cases provided"}), 400
 
-    # Create Excel workbook in memory
     wb = Workbook()
     ws = wb.active
     ws.title = "Test Cases"
 
-    # Add header row
     ws.append(["ID", "Title", "Preconditions", "Steps", "Expected Result"])
 
-    # Fill data rows
     for tc in test_cases:
         ws.append([
             tc.get("id", ""),
@@ -57,12 +53,10 @@ def export_excel():
             tc.get("expected_result", "")
         ])
 
-    # Save workbook to memory
     file_stream = io.BytesIO()
     wb.save(file_stream)
     file_stream.seek(0)
 
-    # Send Excel file as response
     return send_file(
         file_stream,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -70,86 +64,113 @@ def export_excel():
         download_name="test_cases.xlsx"
     )
 
-
 # -----------------------
-# Combined route: generate + export
+# Generate + Export
 # -----------------------
 @app.route("/generate-and-export", methods=["POST"])
 def generate_and_export():
-    """
-    Combines test case generation and Excel export in a single request.
-    Returns the Excel file immediately after generating test cases.
-    """
-    data = request.get_json()
-    requirements = data.get("requirements", "")
-
-    if not requirements:
-        return jsonify({"error": "Requirements text is required"}), 400
-
-    # Prompt to generate test cases in JSON format
-    prompt = f"""
-    You are an expert QA test designer.
-
-    Generate 5 detailed test cases in valid JSON format ONLY for the below requirement:
-
-    {requirements}
-
-    The output MUST be a JSON array of objects.
-
-    Each test case must contain:
-    - id
-    - title
-    - preconditions
-    - steps (as an array)
-    - expected_result
-    """
-
-    # Call OpenAI API
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    ai_output = response.choices[0].message.content.strip()
-    ai_output = ai_output.replace("```json", "").replace("```", "").strip()
-
-    # Convert AI output to JSON
     try:
-        test_cases = json.loads(ai_output)
-    except json.JSONDecodeError:
-        return jsonify({"error": "Model returned invalid JSON", "raw_output": ai_output}), 500
+        print("STEP 1: Request received")
 
-    # Create Excel workbook in memory
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Test Cases"
-    ws.append(["ID", "Title", "Preconditions", "Steps", "Expected Result"])
+        data = request.get_json()
+        requirements = data.get("requirements", "")
+        print("STEP 2:", requirements)
 
-    for tc in test_cases:
-        ws.append([
-            tc.get("id", ""),
-            tc.get("title", ""),
-            tc.get("preconditions", ""),
-            "\n".join(tc.get("steps", [])),
-            tc.get("expected_result", "")
-        ])
+        if not requirements:
+            return jsonify({"error": "Requirements text is required"}), 400
 
-    # Save workbook to memory
-    file_stream = io.BytesIO()
-    wb.save(file_stream)
-    file_stream.seek(0)
+        # Prompt
+        prompt = f"""
+You are an expert QA test designer.
 
-    # Send Excel file as response
-    return send_file(
-        file_stream,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name="test_cases.xlsx"
-    )
+Generate exactly 5 test cases in STRICT JSON format.
 
+Return ONLY a JSON array.
+
+[
+  {{
+    "id": "TC1",
+    "title": "...",
+    "preconditions": "...",
+    "steps": ["step1", "step2"],
+    "expected_result": "..."
+  }}
+]
+
+Requirement:
+{requirements}
+"""
+
+        print("STEP 3: Calling Groq")
+        print(client.models.list())
+        # -----------------------
+        # Groq API Call
+        # -----------------------
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",  # or mixtral
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+
+        ai_output = response.choices[0].message.content.strip()
+
+        # Clean markdown if present
+        ai_output = ai_output.replace("```json", "").replace("```", "").strip()
+
+        # Extract JSON
+        match = re.search(r'\[.*\]', ai_output, re.DOTALL)
+        if match:
+            ai_output = match.group(0)
+
+        try:
+            test_cases = json.loads(ai_output)
+        except json.JSONDecodeError:
+            print("INVALID JSON:", ai_output)
+            return jsonify({
+                "error": "Invalid JSON from model",
+                "raw_output": ai_output
+            }), 500
+
+        print("STEP 4: Creating Excel")
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Test Cases"
+
+        ws.append(["ID", "Title", "Preconditions", "Steps", "Expected Result"])
+
+        for tc in test_cases:
+            ws.append([
+                tc.get("id", ""),
+                tc.get("title", ""),
+                tc.get("preconditions", ""),
+                "\n".join(tc.get("steps", [])),
+                tc.get("expected_result", "")
+            ])
+
+        file_stream = io.BytesIO()
+        wb.save(file_stream)
+        file_stream.seek(0)
+
+        print("STEP 5: Sending file")
+
+        return send_file(
+            file_stream,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="test_cases.xlsx"
+        )
+
+    except Exception as e:
+        import traceback
+        print("ERROR:")
+        traceback.print_exc()
+        return str(e), 500
 
 # -----------------------
-# Run Flask app
+# Run app
 # -----------------------
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=True)
